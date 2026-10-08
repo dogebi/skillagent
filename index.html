@@ -23,6 +23,11 @@
   #stage.pan-l{transform:translateX(-1.6vw) scale(1.04)}
   #stage.pan-r{transform:translateX(1.6vw) scale(1.04)}
   #particles{position:absolute;inset:0;z-index:0}
+  #three3d{position:absolute;inset:0;z-index:0;pointer-events:none}
+  #gpuParticles{position:absolute;inset:0;z-index:1;pointer-events:none}
+  #cap{position:fixed;right:22px;bottom:20px;z-index:10;font-family:var(--mono);font-size:9px;
+    letter-spacing:.2em;color:#525b6e;text-align:right;line-height:1.9}
+  #cap b{color:var(--green);font-weight:500}
   .grid-bg{position:absolute;inset:0;z-index:0;opacity:.13;
     background-image:linear-gradient(rgba(40,224,255,.25) 1px,transparent 1px),linear-gradient(90deg,rgba(40,224,255,.25) 1px,transparent 1px);
     background-size:72px 72px;mask-image:radial-gradient(ellipse 90% 90% at 50% 50%,#000 30%,transparent 100%);
@@ -297,6 +302,8 @@
 <div id="stage">
   <div class="grid-bg"></div>
   <canvas id="particles"></canvas>
+  <canvas id="three3d"></canvas>
+  <canvas id="gpuParticles"></canvas>
   <div class="scanlines"></div>
   <div class="vignette"></div>
   <div class="hud"><i></i><i></i><i></i><i></i></div>
@@ -639,7 +646,10 @@
 <div class="wipe" id="wipe"><span class="wlabel" id="wlabel"></span></div>
 <div id="prog"></div>
 <div id="tcode"><b>00:00</b> / 02:50</div>
+<div id="cap"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
 <script>
 /* ---------- particle field ---------- */
 const cv=document.getElementById('particles'),cx=cv.getContext('2d');let W,H,ps=[];
@@ -730,9 +740,22 @@ const TL=[
 const TOTAL=170;
 let timers=[],tickT=null;
 function on(id){document.querySelectorAll('.scene').forEach(s=>s.classList.remove('on'));qs('#'+id).classList.add('on')}
-function cam(m){const st=qs('#stage');st.classList.remove('z-in','z-out','pan-l','pan-r');if(m)st.classList.add(m)}
-function wipeTo(fn,label){const w=qs('#wipe');qs('#wlabel').textContent=label||'';
-  w.classList.remove('go');void w.offsetWidth;w.classList.add('go');setTimeout(fn,240)}
+/* GSAP-driven camera targets for the three.js scene */
+const CAM3D={ '':{x:0,z:8.4,rx:0},'z-in':{x:0,z:7.0,rx:0},'z-out':{x:0,z:9.8,rx:0},
+  'pan-l':{x:-1.5,z:8.2,rx:.06},'pan-r':{x:1.5,z:8.2,rx:-.06}};
+let camTgt=Object.assign({},CAM3D['']);
+function cam(m){const st=qs('#stage');st.classList.remove('z-in','z-out','pan-l','pan-r');if(m)st.classList.add(m);
+  Object.assign(camTgt,CAM3D[m||''])}
+function wipeTo(fn,label){qs('#wlabel').textContent=label||'';
+  if(window.gsap){const w=qs('#wipe');
+    gsap.timeline()
+      .fromTo(w,{height:0,opacity:1},{height:'130%',duration:.26,ease:'power3.in'})
+      .fromTo('#wlabel',{opacity:0,letterSpacing:'1.6em'},{opacity:1,letterSpacing:'.7em',duration:.22,ease:'power2.out'},'<.08')
+      .add(()=>fn())
+      .to('#wlabel',{opacity:0,letterSpacing:'.2em',duration:.25,ease:'power2.in'},'+=.06')
+      .to(w,{opacity:0,duration:.3,ease:'power2.out'},'<')
+      .set(w,{height:0});}
+  else{const w=qs('#wipe');w.classList.remove('go');void w.offsetWidth;w.classList.add('go');setTimeout(fn,240)}}
 const fmt=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 function play(){
   timers.forEach(clearTimeout);timers=[];clearInterval(tickT);
@@ -748,6 +771,112 @@ function play(){
 let started=0;const go=()=>{if(!started){started=1;play()}};
 document.fonts?document.fonts.ready.then(()=>setTimeout(go,150)):setTimeout(go,600);
 setTimeout(go,1800);
+
+/* ================= three.js · WebGL ================= */
+let threeOK=false;
+(()=>{
+  if(!window.THREE)return;
+  const capEl=document.getElementById('cap');
+  const cvs=document.getElementById('three3d');
+  const rnd=new THREE.WebGLRenderer({canvas:cvs,alpha:true,antialias:true});
+  rnd.setPixelRatio(Math.min(devicePixelRatio,2));
+  const sc=new THREE.Scene();
+  const cam3=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,.1,100);
+  cam3.position.set(0,0,8.4);
+  // wireframe icosahedron + glowing vertices
+  const ico=new THREE.IcosahedronGeometry(2.7,1);
+  sc.add(new THREE.LineSegments(new THREE.WireframeGeometry(ico),
+    new THREE.LineBasicMaterial({color:0x8b7bff,transparent:true,opacity:.26})));
+  sc.add(new THREE.Points(ico,new THREE.PointsMaterial({color:0x28e0ff,size:.07,transparent:true,opacity:.85})));
+  // starfield shell
+  const N=1600,arr=new Float32Array(N*3);
+  for(let i=0;i<N;i++){const r=7+Math.random()*12,t=Math.random()*Math.PI*2,p=Math.acos(2*Math.random()-1);
+    arr[i*3]=r*Math.sin(p)*Math.cos(t);arr[i*3+1]=r*Math.sin(p)*Math.sin(t);arr[i*3+2]=r*Math.cos(p)}
+  const bg=new THREE.BufferGeometry();bg.setAttribute('position',new THREE.BufferAttribute(arr,3));
+  sc.add(new THREE.Points(bg,new THREE.PointsMaterial({color:0x9fb6ff,size:.045,transparent:true,opacity:.5})));
+  const star=sc.children[sc.children.length-1];
+  function rsz(){rnd.setSize(innerWidth,innerHeight);cam3.aspect=innerWidth/innerHeight;cam3.updateProjectionMatrix()}
+  addEventListener('resize',rsz);rsz();
+  threeOK=true;
+  capEl.innerHTML='THREE.JS r158 · WEBGL'+(rnd.capabilities.isWebGL2?'2':'')+' <b>ON</b><br>';
+  (function loop(t){
+    sc.children[0].rotation.y=t*.00007;sc.children[0].rotation.x=Math.sin(t*.00005)*.3;
+    sc.children[1].rotation.y=-t*.00009;
+    star.rotation.y=t*.000012;
+    cam3.position.x+=(camTgt.x-cam3.position.x)*.045;
+    cam3.position.z+=(camTgt.z-cam3.position.z)*.045;
+    cam3.rotation.x+=(camTgt.rx-cam3.rotation.x)*.045;
+    rnd.render(sc,cam3);
+    requestAnimationFrame(loop)})(0);
+})();
+
+/* ================= WebGPU particles ================= */
+(async()=>{
+  const capEl=document.getElementById('cap');
+  if(!navigator.gpu){capEl.innerHTML+='PARTICLES · CANVAS2D (WEBGPU N/A)';return}
+  try{
+    const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw 0;
+    const device=await adapter.requestDevice();
+    const cvs=document.getElementById('gpuParticles');
+    const ctx=cvs.getContext('webgpu');
+    const fmt=navigator.gpu.getPreferredCanvasFormat();
+    ctx.configure({device,format:fmt,alphaMode:'premultiplied'});
+    const dpr=Math.min(devicePixelRatio,2);
+    function rsz(){cvs.width=innerWidth*dpr;cvs.height=innerHeight*dpr}
+    addEventListener('resize',rsz);rsz();
+    const N=420,verts=N*6,stride=8, // x y r g b a u v
+      buf=device.createBuffer({size:verts*stride*4,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+    const module=device.createShaderModule({code:`
+      struct VOut{@builtin(position) p:vec4f,@location(0) col:vec3f,@location(1) a:f32,@location(2) uv:vec2f}
+      @vertex fn vs(@location(0) pos:vec2f,@location(1) col:vec3f,@location(2) a:f32,@location(3) uv:vec2f)->VOut{
+        var o:VOut;o.p=vec4f(pos,0.0,1.0);o.col=col;o.a=a;o.uv=uv;return o}
+      @fragment fn fs(v:VOut)->@location(0) vec4f{
+        let d=length(v.uv);
+        if(d>1.0){discard}
+        return vec4f(v.col*v.a*(1.0-d*d),v.a*(1.0-d*d))}`});
+    const pipe=await device.createRenderPipelineAsync({layout:'auto',
+      vertex:{module,entryPoint:'vs',buffers:[{arrayStride:stride*4,attributes:[
+        {shaderLocation:0,offset:0,format:'float32x2'},{shaderLocation:1,offset:8,format:'float32x3'},
+        {shaderLocation:2,offset:20,format:'float32'},{shaderLocation:3,offset:24,format:'float32x2'}]}]},
+      fragment:{module,entryPoint:'fs',targets:[{format:fmt,blend:{
+        color:{srcFactor:'one',dstFactor:'one'},alpha:{srcFactor:'one',dstFactor:'one'}}}]},
+      primitive:{topology:'triangle-list'}});
+    const PAL3=[[.16,.88,1],[.55,.48,1],[1,.48,.18],[.24,1,.66]];
+    const P=[];
+    for(let i=0;i<N;i++)P.push({x:Math.random()*2-1,y:Math.random()*2-1,
+      vx:(Math.random()-.5)*.0007,vy:(Math.random()-.5)*.0007,
+      s:.0018+Math.random()*.0035,a:.15+Math.random()*.5,c:PAL3[i%4]});
+    const data=new Float32Array(verts*stride);
+    const U=[-1,-1,1,-1,1,1,-1,-1,1,1,-1,1],V=[-1,1,1,-1,1,1,-1,-1,1,-1,-1,1];
+    document.getElementById('particles').style.display='none'; // 2D canvas replaced
+    capEl.innerHTML+='PARTICLES · WEBGPU <b>ON</b>';
+    (function loop(){
+      for(let i=0;i<N;i++){const p=P[i];
+        p.x+=p.vx;p.y+=p.vy;
+        if(p.x<-1.05||p.x>1.05)p.vx*=-1;if(p.y<-1.05||p.y>1.05)p.vy*=-1;
+        for(let k=0;k<6;k++){const o=(i*6+k)*stride,
+          su=p.s*(innerHeight/innerWidth||1);
+          data[o]=p.x+U[k]*su;data[o+1]=p.y+V[k]*p.s;
+          data[o+2]=p.c[0];data[o+3]=p.c[1];data[o+4]=p.c[2];data[o+5]=p.a;
+          data[o+6]=U[k];data[o+7]=V[k]}}
+      device.queue.writeBuffer(buf,0,data);
+      const enc=device.createCommandEncoder();
+      const pass=enc.beginRenderPass({colorAttachments:[{view:ctx.getCurrentTexture().createView(),
+        clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
+      pass.setPipeline(pipe);pass.setVertexBuffer(0,buf);pass.draw(verts);pass.end();
+      device.queue.submit([enc.finish()]);
+      requestAnimationFrame(loop)})();
+  }catch(e){capEl.innerHTML+='PARTICLES · CANVAS2D (WEBGPU FAILED)'}
+})();
+
+/* ================= GSAP entrances ================= */
+if(window.gsap){
+  gsap.from('.kicker',{y:-26,opacity:0,duration:.8,ease:'power3.out',delay:.25});
+  gsap.from('#s01 .tag',{opacity:0,y:14,duration:.9,ease:'power2.out',delay:1});
+  gsap.from('.hud i',{scale:0,opacity:0,duration:.5,stagger:.12,ease:'back.out(2.4)',delay:.35});
+  gsap.from('.ticker',{opacity:0,duration:1.1,ease:'power2.out',delay:.55});
+  gsap.to('#s16 .fin',{y:-9,duration:2.6,yoyo:true,repeat:-1,ease:'sine.inOut',delay:167});
+}
 </script>
 </body>
 </html>
